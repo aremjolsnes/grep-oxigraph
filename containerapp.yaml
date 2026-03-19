@@ -20,7 +20,7 @@ properties:
             volumeName: data-volume
         env:
           - name: RUST_LOG
-            value: info
+            value: debug
         probes:
           - type: Liveness
             httpGet:
@@ -39,10 +39,12 @@ properties:
             failureThreshold: 5
             timeoutSeconds: 5
     scale:
-      minReplicas: 0
+      minReplicas: 1
       maxReplicas: 1
+
     volumes:
       - name: data-volume
         storageName: oxigraph-storage
         storageType: AzureFile
+        mountOptions: uid=1000,gid=1000,nobrl
 

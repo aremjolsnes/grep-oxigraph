@@ -7,7 +7,7 @@ services:
     volumes:
       - oxigraph_data:/data
     restart: unless-stopped
-    command: serve --location /data --bind 0.0.0.0:7878
+    command: serve --location /data/oxidb --bind 0.0.0.0:7878
 
 volumes:
   oxigraph_data:
