@@ -2,8 +2,8 @@ name: Ingest data to Oxigraph
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Hver natt kl 00:00
-  workflow_dispatch: # Gir deg den grå knappen for å kjøre manuelt
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
   ingest:
@@ -12,20 +12,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Apache Jena (RIOT)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jena-repo-tools
-
       - name: Download Grep data
         run: |
           curl -L -o grep-data.zip https://data.udir.no/kl06/v201906/grep-data.zip
           unzip grep-data.zip -d grep-temp
 
-      - name: Convert to N-Triples (with RIOT)
+      - name: Convert to N-Triples (using Oxigraph locally)
         run: |
-          # Vi konverterer alle JSON-LD filene til én stor N-Triples fil for rask opplasting
-          find grep-temp -name "*.jsonld" | xargs riot --output=ntriples > grep-all.nt
+          # Vi bruker Oxigraph-containeren til å slå sammen alle småfilene til én stor .nt-fil
+          # Vi må først finne alle filene og lage en liste
+          find grep-temp -name "*.jsonld" > file-list.txt
+          
+          # Vi "streamer" alle filene inn i én stor fil ved hjelp av enkel tekst-sammenslåing (siden JSON-LD er litt vrien å cat-e direkte, 
+          # så bruker vi likevel en enkel konvertering per fil hvis nødvendig, men la oss prøve å sende dem direkte som en liste)
+          
+          # Ny taktikk: Vi bruker npx og et enkelt RDF-verktøy som alltid er tilgjengelig:
+          npx -y rdf-cli serialize grep-temp/**/*.jsonld --output-format application/n-triples > grep-all.nt
 
       - name: Wake up Oxigraph (Wait for 200 OK)
         run: |
@@ -44,13 +46,13 @@ jobs:
 
       - name: Wipe and Load Cloud Data
         run: |
-          # 1. Tøm databasen (Wipe)
+          # 1. Tøm databasen
           curl -X POST "${{ secrets.OXIGRAPH_URL }}/update" \
             -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
             -H "Content-Type: application/sparql-update" \
             --data "CLEAR DEFAULT"
 
-          # 2. Last inn ny data (Load)
+          # 2. Last inn ny data (.nt format er superraskt)
           curl -X POST "${{ secrets.OXIGRAPH_URL }}/store" \
             -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
             -H "Content-Type: application/n-triples" \
