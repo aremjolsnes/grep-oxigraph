@@ -1,0 +1,50 @@
+name: Deploy Oxigraph to Azure
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Mulighet for manuelt start
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/grep-oxigraph:latest
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          containerAppName: grep-oxigraph
+          resourceGroup: rg-grep-prod
+          imageToDeploy: ghcr.io/${{ github.repository_owner }}/grep-oxigraph:latest
+          # Her er magien for å holde det gratis:
+          cpu: 0.25
+          memory: 0.5Gi
+          minReplicas: 0 # Den sover når den ikke er i bruk (gratis!)
+          maxReplicas: 1
+          targetPort: 7878
+          ingress: external

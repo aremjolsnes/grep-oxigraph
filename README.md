@@ -4,29 +4,29 @@ Denne løsningen speiler Apache Jena Fuseki-oppsettet i `..\grep-sparql`, men br
 
 ## Forutsetninger
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installert og kjørende.
-- PowerShell (for `ingest.ps1`).
+- En [Azure Free Account](https://azure.microsoft.com/free) (valgfritt for sky-test).
 
-## Slik kommer du i gang
+## Lokal kjøring
 
-1. **Start Oxigraph-serveren:**
-   Åpne en terminal i denne mappen og kjør:
-   ```bash
-   docker compose up -d
-   ```
+1.  **Start Oxigraph-serveren:**
+    ```bash
+    docker compose up -d
+    ```
+2.  **Last inn data (Wipe-and-Load):**
+    ```powershell
+    .\ingest.ps1
+    ```
+3.  **Test:** Gå til [http://localhost:7878](http://localhost:7878).
 
-2. **Last inn data (Wipe-and-Load):**
-   Kjør PowerShell-skriptet for å hente data fra Udir og laste det inn i Oxigraph:
-   ```powershell
-   .\ingest.ps1
-   ```
-   *Dette skriptet vil tømme det eksisterende `default`-graphet før det laster inn nye data.*
+## Distribuert i Azure (Container Apps)
 
-3. **Test spørringer:**
-   Oxigraph har et innebygd web-grensesnitt på: [http://localhost:7878](http://localhost:7878)
-   Du kan kjøre SPARQL-spørringer der, eller bruke en klient mot `/query`-endepunktet.
+Dette prosjektet er ferdig oppsatt for å kjøre i en **Azure Container App** med "Scale to Zero" (sover når den ikke er i bruk for å spare penger).
 
-## Sammenligning med Fuseki
-- **Ytelse:** Oxigraph er ofte raskere og bruker mindre minne enn Fuseki.
-- **Wipe:** Vi bruker `CLEAR DEFAULT` via SPARQL Update API-et for en "elegant" wipe.
-- **Data:** Skriptet håndterer JSON-LD-formatet direkte, som Oxigraph støtter ut av boksen.
-- **Storage:** Data lagres i et Docker-volum (`oxigraph_data`). For å slette alt fysisk, kan du bruke `docker compose down -v`.
+### GitHub Actions:
+- `deploy-azure.yml`: Bygger og ruller ut koden til Azure (via GitHub Registry).
+- `ingest-data.yml`: Henter nattlige oppdateringer fra Udir og laster dem opp til skyen.
+
+### Nødvendige Secrets i GitHub:
+- `AZURE_CREDENTIALS`: Azure Service Principal (JSON).
+- `OXIGRAPH_URL`: URL til din Container App i Azure.
+- `OXIGRAPH_USER` / `OXIGRAPH_PASSWORD`: Hvis du har satt opp sikring av tjenesten.
