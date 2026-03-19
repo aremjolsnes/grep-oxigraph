@@ -1,0 +1,53 @@
+name: Ingest Grep Data (Oxigraph)
+
+on:
+  schedule:
+    - cron: '0 21 * * *' # Hver natt kl 22:00 (Norsk tid / CET)
+  workflow_dispatch: # Mulighet for å starte manuelt
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download and Process
+        run: |
+          mkdir -p temp/extracted
+          echo "Laster ned data fra Udir..."
+          curl -L https://data.udir.no/kl06/v201906/dump/jsonld -o temp/data.zip
+          unzip temp/data.zip -d temp/extracted
+
+          # Vi bruker Apache Jena (RIOT) for å slå sammen mange små JSON-LD filer til én stor N-Triples fil.
+          # Dette er mer robust og raskere for store datasett enn å laste opp én og én fil over nett.
+          wget -q https://archive.apache.org/dist/jena/binaries/apache-jena-5.3.0.tar.gz
+          tar -xf apache-jena-5.3.0.tar.gz
+          RIOT_CMD=$(pwd)/apache-jena-5.3.0/bin/riot
+          
+          echo "Konverterer til én stor N-Triples fil..."
+          find temp/extracted -name "*.jsonld" > file_list.txt
+          $RIOT_CMD --output=nt $(cat file_list.txt) > all_data.nt
+
+      - name: Wipe and Load to Oxigraph
+        env:
+          OX_URL: ${{ secrets.OXIGRAPH_URL }}
+          OX_USER: ${{ secrets.OXIGRAPH_USER }}
+          OX_PASS: ${{ secrets.OXIGRAPH_PASSWORD }}
+        run: |
+          # Sørg for at URL-en ikke har trailing slash
+          CLEAN_URL=$(echo "$OX_URL" | sed 's/\/$//')
+          
+          # Auth string hvis brukernavn er satt
+          AUTH_FLAG=""
+          if [ ! -z "$OX_USER" ]; then
+            AUTH_FLAG="-u $OX_USER:$OX_PASS"
+          fi
+
+          echo "Tømmer gammelt datasett (wipe)..."
+          curl $AUTH_FLAG -X POST -H 'Content-Type: application/sparql-update' --data 'CLEAR DEFAULT' "$CLEAN_URL/update" --fail
+          
+          echo "Laster opp nye data til default graph..."
+          curl $AUTH_FLAG -X POST -H 'Content-Type: application/n-triples' --data-binary @all_data.nt "$CLEAN_URL/store?default" --fail
+          
+          echo "Fullført!"
