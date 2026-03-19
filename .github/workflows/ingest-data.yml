@@ -1,51 +1,89 @@
-name: Ingest data to Oxigraph
+name: Ingest Grep Data (Real-time Flow)
 
 on:
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 21 * * *' # Hver natt kl 22:00 (Norsk tid / CET)
+  workflow_dispatch: # Mulighet for å starte manuelt
 
 jobs:
   ingest:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create Test Data
+      - name: Download, Process and Ingest
         run: |
-          echo "Lager testdata..."
-          cat <<EOF > grep-all.nt
-          <https://data.udir.no/kl06/test-1> <http://www.w3.org/2000/01/rdf-schema#label> "Test 1" .
-          <https://data.udir.no/kl06/test-2> <http://www.w3.org/2000/01/rdf-schema#label> "Test 2" .
-          EOF
-
-      - name: Wake up Oxigraph
-        run: |
-          URL=$(echo "${{ secrets.OXIGRAPH_URL }}" | sed 's/\/$//')
-          for i in {1..10}; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
-            if [ "$STATUS" == "200" ]; then exit 0; fi
-            sleep 5
-          done
-
-      - name: Wipe and Load Cloud Data
-        run: |
+          # 1. Klargjør variabler
           URL=$(echo "${{ secrets.OXIGRAPH_URL }}" | sed 's/\/$//')
           
-          # Vi bruker nå den mest eksplisitte metoden: /store?default
-          echo "Dytter data til $URL/store?default ..."
-          curl -f -X POST "$URL/store?default" \
-            -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
-            -H "Content-Type: application/n-triples" \
-            --data-binary @grep-all.nt
+          # 2. Hent siste endrings-id fra Udir
+          LATEST_ID=$(curl -s "https://data.udir.no/kl06/v201906/endringer?antall=1" | grep -oE '"endrings-id":\s*"[^"]+"' | head -n 1 | cut -d'"' -f4)
+          echo "Siste endrings-id fra Udir: $LATEST_ID"
 
-      - name: Verify Data Immediately
-        run: |
-          URL=$(echo "${{ secrets.OXIGRAPH_URL }}" | sed 's/\/$//')
-          echo "Sjekker antall tripler rett etter opplasting..."
-          curl -f -X POST "$URL/query" \
-            -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
-            -H "Content-Type: application/sparql-query" \
-            -H "Accept: application/sparql-results+json" \
-            --data "SELECT (COUNT(*) as ?c) WHERE { ?s ?p ?o }"
+          # 3. Sjekk hva vi har lagret i Oxigraph (Metadata-triple)
+          # Vi bruker SPARQL direkte mot Oxigraph
+          STORED_ID=$(curl -s -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
+               -H "Content-Type: application/sparql-query" \
+               -H "Accept: application/sparql-results+json" \
+               --data "SELECT ?id WHERE { <https://grep.udir.no/meta> <https://grep.udir.no/schema/last-id> ?id }" \
+               "$URL/query" | grep -oE '"value":\s*"[^"]+"' | head -n 1 | cut -d'"' -f4 || echo "ingenting")
+          echo "Lagret ID i Oxigraph: $STORED_ID"
+
+          # 4. Sammenlign (hopp over hvis like, med mindre det er manuell start)
+          if [ "$LATEST_ID" == "$STORED_ID" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "Ingen nye endringer hos Udir. Hopper over oppdatering."
+            exit 0
+          fi
+          echo "Endring oppdaget eller manuell kjøring! Starter prosess..."
+
+          # 5. Last ned rådata
+          mkdir -p temp/extracted
+          echo "Laster ned dump fra Udir..."
+          curl -f -L https://data.udir.no/kl06/v201906/dump/jsonld -o temp/data.zip
+          unzip -q temp/data.zip -d temp/extracted
+
+          # 6. Installer Apache Jena (RIOT) for konvertering
+          echo "Laster ned Apache Jena (RIOT)..."
+          wget -q https://archive.apache.org/dist/jena/binaries/apache-jena-5.3.0.tar.gz
+          tar -xf apache-jena-5.3.0.tar.gz
+          RIOT_CMD=$(pwd)/apache-jena-5.3.0/bin/riot
+          
+          # 7. Konverter til én stor N-Triples fil
+          echo "Konverterer JSON-LD til N-Triples..."
+          find temp/extracted -name "*.jsonld" > file_list.txt
+          $RIOT_CMD --output=nt $(cat file_list.txt) > all_data.nt
+          
+          # 8. Sørg for at Oxigraph er våken
+          echo "Vekker Oxigraph..."
+          for i in {1..20}; do
+            if curl -s -o /dev/null -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" --fail "$URL"; then
+              break
+            fi
+            sleep 10
+          done
+
+          # 9. Tøm og Last opp til Oxigraph
+          echo "Tømmer gammelt datasett i Oxigraph..."
+          curl -f -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
+               -X POST \
+               -H "Content-Type: application/sparql-update" \
+               --data "CLEAR DEFAULT" \
+               "$URL/update"
+          
+          echo "Laster opp nye tripler (ca 1.1 million)..."
+          curl -f -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
+               -X POST \
+               -H "Content-Type: application/n-triples" \
+               --data-binary @all_data.nt \
+               "$URL/store?default"
+
+          # 10. Lagre den nye ID-en som metadata
+          echo "<https://grep.udir.no/meta> <https://grep.udir.no/schema/last-id> \"$LATEST_ID\" ." > metadata.nt
+          curl -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
+               -X POST \
+               -H "Content-Type: application/n-triples" \
+               --data-binary @metadata.nt \
+               "$URL/store?default"
+          
+          echo "Fullført! Oxigraph er nå oppdatert til Udir-ID: $LATEST_ID"
