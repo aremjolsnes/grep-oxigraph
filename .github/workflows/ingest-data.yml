@@ -1,60 +1,57 @@
-name: Ingest Grep Data (Oxigraph)
+name: Ingest data to Oxigraph
 
 on:
   schedule:
-    - cron: '0 21 * * *' # Hver natt kl 22:00 (Norsk tid / CET)
-  workflow_dispatch: # Mulighet for å starte manuelt
+    - cron: '0 0 * * *' # Hver natt kl 00:00
+  workflow_dispatch: # Gir deg den grå knappen for å kjøre manuelt
 
 jobs:
   ingest:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download and Process
+      - name: Set up Apache Jena (RIOT)
         run: |
-          mkdir -p temp/extracted
-          echo "Laster ned data fra Udir..."
-          curl -L https://data.udir.no/kl06/v201906/dump/jsonld -o temp/data.zip
-          unzip temp/data.zip -d temp/extracted
+          sudo apt-get update
+          sudo apt-get install -y jena-repo-tools
 
-          wget -q https://archive.apache.org/dist/jena/binaries/apache-jena-5.3.0.tar.gz
-          tar -xf apache-jena-5.3.0.tar.gz
-          RIOT_CMD=$(pwd)/apache-jena-5.3.0/bin/riot
-          
-          echo "Konverterer til én stor N-Triples fil..."
-          find temp/extracted -name "*.jsonld" > file_list.txt
-          $RIOT_CMD --output=nt $(cat file_list.txt) > all_data.nt
-
-      - name: Wipe and Load to Oxigraph
-        env:
-          OX_URL: ${{ secrets.OXIGRAPH_URL }}
-          OX_USER: ${{ secrets.OXIGRAPH_USER }}
-          OX_PASS: ${{ secrets.OXIGRAPH_PASSWORD }}
+      - name: Download Grep data
         run: |
-          CLEAN_URL=$(echo "$OX_URL" | sed 's/\/$//')
-          
-          AUTH_FLAG=""
-          if [ ! -z "$OX_USER" ]; then
-            AUTH_FLAG="-u $OX_USER:$OX_PASS"
-          fi
+          curl -L -o grep-data.zip https://data.udir.no/kl06/v201906/grep-data.zip
+          unzip grep-data.zip -d grep-temp
 
-          # VEKKEKLOKKE FOR SERVERLESS (Azure Container Apps Scale to Zero)
-          echo "Vekker serveren på $CLEAN_URL (kan ta litt tid)..."
-          for i in {1..20}; do
-            if curl -s -o /dev/null $AUTH_FLAG --fail "$CLEAN_URL/query?query=ASK{}"; then
-              echo "Serveren er våken!"
-              break
+      - name: Convert to N-Triples (with RIOT)
+        run: |
+          # Vi konverterer alle JSON-LD filene til én stor N-Triples fil for rask opplasting
+          find grep-temp -name "*.jsonld" | xargs riot --output=ntriples > grep-all.nt
+
+      - name: Wake up Oxigraph (Wait for 200 OK)
+        run: |
+          echo "Vekker Oxigraph på ${{ secrets.OXIGRAPH_URL }}..."
+          for i in {1..30}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.OXIGRAPH_URL }} || echo "000")
+            if [ "$STATUS" == "200" ]; then
+              echo "Oxigraph er våken!"
+              exit 0
             fi
-            echo "Venter på oppstart ($i/20)..."
+            echo "Venter på at serveren skal starte... (Forsøk $i/30)"
             sleep 10
           done
+          echo "Serveren startet ikke i tide."
+          exit 1
 
-          echo "Tømmer gammelt datasett (wipe)..."
-          curl $AUTH_FLAG -X POST -H 'Content-Type: application/sparql-update' --data 'CLEAR DEFAULT' "$CLEAN_URL/update" --fail
-          
-          echo "Laster opp nye data..."
-          curl $AUTH_FLAG -X POST -H 'Content-Type: application/n-triples' --data-binary @all_data.nt "$CLEAN_URL/store?default" --fail
-          
-          echo "Fullført!"
+      - name: Wipe and Load Cloud Data
+        run: |
+          # 1. Tøm databasen (Wipe)
+          curl -X POST "${{ secrets.OXIGRAPH_URL }}/update" \
+            -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
+            -H "Content-Type: application/sparql-update" \
+            --data "CLEAR DEFAULT"
+
+          # 2. Last inn ny data (Load)
+          curl -X POST "${{ secrets.OXIGRAPH_URL }}/store" \
+            -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
+            -H "Content-Type: application/n-triples" \
+            --data-binary @grep-all.nt

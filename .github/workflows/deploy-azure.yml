@@ -40,10 +40,10 @@ jobs:
           # 1. Sikre at Managed Environment finnes
           az containerapp env create --name env-grep-prod --resource-group rg-grep-prod --location northeurope
 
-          # 2. Hent lagringsnøkkelen (vi trenger denne for å koble til disken)
+          # 2. Hent lagringsnøkkelen
           STORAGE_KEY=$(az storage account keys list --resource-group rg-grep-prod --account-name grepoxiamj123 --query "[0].value" --output tsv)
 
-          # 3. Definer lagringen i Environment-et (hvis den ikke finnes)
+          # 3. Definer lagringen i Environment-et
           az containerapp env storage set \
             --name env-grep-prod \
             --resource-group rg-grep-prod \
