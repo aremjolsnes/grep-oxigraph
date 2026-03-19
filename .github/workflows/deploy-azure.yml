@@ -35,11 +35,6 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Prepare Container App Manifest
-        run: |
-          # Vi erstatter OWNER_PLACEHOLDER med ditt faktiske brukernavn
-          sed -i "s/OWNER_PLACEHOLDER/${{ github.repository_owner }}/g" containerapp.yaml
-
       - name: Deploy to Azure Container Apps
         run: |
           # 1. Sikre at Managed Environment finnes
@@ -58,9 +53,15 @@ jobs:
             --azure-file-account-key $STORAGE_KEY \
             --access-mode ReadWrite
 
-          # 4. Opprett eller oppdater ved hjelp av YAML-fila
+          # 4. Opprett eller oppdater Container Appen
+          # Vi bruker den sikreste syntaksen for JSON-strenger i bash
           az containerapp create \
             --name grep-oxigraph \
             --resource-group rg-grep-prod \
             --environment env-grep-prod \
-            --yaml containerapp.yaml
+            --image ghcr.io/${{ github.repository_owner }}/grep-oxigraph:latest \
+            --cpu 0.25 --memory 0.5Gi \
+            --ingress external --target-port 7878 \
+            --min-replicas 0 --max-replicas 1 \
+            --volumes '[{"name": "data-volume", "storageName": "oxigraph-storage", "storageType": "AzureFile"}]' \
+            --volume-mounts '[{"mountPath": "/data", "name": "data-volume"}]'
