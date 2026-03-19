@@ -40,7 +40,20 @@ jobs:
           # 1. Sikre at Managed Environment finnes
           az containerapp env create --name env-grep-prod --resource-group rg-grep-prod --location northeurope
 
-          # 2. Opprett eller oppdater selve Container Appen med en forenklet kommando
+          # 2. Hent lagringsnøkkelen (vi trenger denne for å koble til disken)
+          STORAGE_KEY=$(az storage account keys list --resource-group rg-grep-prod --account-name grepoxiamj123 --query "[0].value" --output tsv)
+
+          # 3. Definer lagringen i Environment-et (hvis den ikke finnes)
+          az containerapp env storage set \
+            --name env-grep-prod \
+            --resource-group rg-grep-prod \
+            --storage-name oxigraph-storage \
+            --account-name grepoxiamj123 \
+            --share-name oxigraph-data \
+            --access-mode ReadWrite \
+            --account-key $STORAGE_KEY
+
+          # 4. Opprett eller oppdater selve Container Appen med montert disk
           az containerapp create \
             --name grep-oxigraph \
             --resource-group rg-grep-prod \
@@ -48,4 +61,7 @@ jobs:
             --image ghcr.io/${{ github.repository_owner }}/grep-oxigraph:latest \
             --cpu 0.25 --memory 0.5Gi \
             --ingress external --target-port 7878 \
-            --min-replicas 0 --max-replicas 1
+            --min-replicas 0 --max-replicas 1 \
+            --volume-name data-volume \
+            --volume-mount-path /data \
+            --storage-name oxigraph-storage
