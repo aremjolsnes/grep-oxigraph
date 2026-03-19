@@ -1,8 +1,13 @@
+# Oxigraph deployment manifest for Azure Container Apps
+# Oppdatert etter "undo"-uhell for å sikre stabil drift og bildehenting.
 properties:
   configuration:
+    activeRevisionsMode: Single
     ingress:
       external: true
       targetPort: 7878
+      allowInsecure: false
+      transport: http
   template:
     containers:
       - image: ghcr.io/OWNER_PLACEHOLDER/grep-oxigraph:latest
@@ -13,19 +18,26 @@ properties:
         volumeMounts:
           - mountPath: /data
             volumeName: data-volume
+        env:
+          - name: RUST_LOG
+            value: info
         probes:
           - type: Liveness
             httpGet:
               path: /
               port: 7878
-            initialDelaySeconds: 15
-            periodSeconds: 30
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 5
+            timeoutSeconds: 5
           - type: Readiness
             httpGet:
               path: /
               port: 7878
-            initialDelaySeconds: 15
-            periodSeconds: 30
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 5
+            timeoutSeconds: 5
     scale:
       minReplicas: 0
       maxReplicas: 1
@@ -33,3 +45,4 @@ properties:
       - name: data-volume
         storageName: oxigraph-storage
         storageType: AzureFile
+

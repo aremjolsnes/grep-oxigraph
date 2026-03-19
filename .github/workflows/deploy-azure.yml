@@ -37,8 +37,8 @@ jobs:
 
       - name: Prepare Container App Manifest
         run: |
-          # Vi erstatter OWNER_PLACEHOLDER med ditt faktiske brukernavn
-          sed -i "s/OWNER_PLACEHOLDER/${{ github.repository_owner }}/g" containerapp.yaml
+          # Vi erstatter OWNER_PLACEHOLDER med ditt faktiske brukernavn (bruker | som skilletegn for sikkerhets skyld)
+          sed -i "s|OWNER_PLACEHOLDER|${{ github.repository_owner }}|g" containerapp.yaml
 
       - name: Deploy to Azure Container Apps
         uses: azure/container-apps-deploy-action@v1
@@ -48,3 +48,7 @@ jobs:
           containerAppEnvironment: env-grep-prod
           imageToDeploy: ghcr.io/${{ github.repository_owner }}/grep-oxigraph:latest
           yamlConfigPath: containerapp.yaml
+          registryUrl: ghcr.io
+          registryUsername: ${{ github.actor }}
+          registryPassword: ${{ secrets.GITHUB_TOKEN }}
+
