@@ -1,0 +1,9 @@
+# Temporary data from ingestion script
+temp_data/
+
+# Local Oxigraph data (if not using named volumes)
+oxigraph_data/
+
+# OS files
+.DS_Store
+Thumbs.db
