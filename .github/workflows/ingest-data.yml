@@ -12,22 +12,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download Grep data
+      - name: Create Test Data
         run: |
-          # Vi henter nå en fil som vi er helt sikre på at eksisterer
-          echo "Laster ned Grep-data..."
-          curl -f -L -o grep-all.nt https://raw.githubusercontent.com/stemmen/grep-rdf/main/grep.nt
+          # Vi lager noen få test-tripler manuelt for å bekrefte at opplastingen fungerer
+          echo "Lager testdata..."
+          cat <<EOF > grep-all.nt
+          <https://data.udir.no/kl06/test-ressurs-1> <http://www.w3.org/2000/01/rdf-schema#label> "Dette er en test-trippel i Azure" .
+          <https://data.udir.no/kl06/test-ressurs-1> <http://www.w3.org/2000/01/rdf-schema#comment> "Oxigraph fungerer med persistent lagring!" .
+          <https://data.udir.no/kl06/test-ressurs-2> <http://www.w3.org/2000/01/rdf-schema#label> "Grep Oxigraph" .
+          EOF
           
-          # Sjekk om fila faktisk inneholder noe
           ls -lh grep-all.nt
-          if [ ! -s grep-all.nt ]; then
-            echo "FEIL: Fila er tom eller ble ikke lastet ned!"
-            exit 1
-          fi
 
       - name: Wake up Oxigraph (Wait for 200 OK)
         run: |
-          # Vi fjerner eventuell trailing slash fra URL-en for sikkerhets skyld
           URL=$(echo "${{ secrets.OXIGRAPH_URL }}" | sed 's/\/$//')
           echo "Vekker Oxigraph på $URL..."
           for i in {1..30}; do
@@ -53,7 +51,7 @@ jobs:
             -H "Content-Type: application/sparql-update" \
             --data "CLEAR DEFAULT"
 
-          # 2. Last inn ny data (vi bruker -v for å se hva som skjer)
+          # 2. Last inn ny data
           curl -f -v -X POST "$URL/store" \
             -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
             -H "Content-Type: application/n-triples" \
