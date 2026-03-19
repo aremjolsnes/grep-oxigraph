@@ -1,0 +1,22 @@
+properties:
+  configuration:
+    ingress:
+      external: true
+      targetPort: 7878
+  template:
+    containers:
+      - image: ghcr.io/OWNER_PLACEHOLDER/grep-oxigraph:latest
+        name: grep-oxigraph
+        resources:
+          cpu: 0.25
+          memory: 0.5Gi
+        volumeMounts:
+          - mountPath: /data
+            volumeName: data-volume
+    scale:
+      minReplicas: 0
+      maxReplicas: 1
+    volumes:
+      - name: data-volume
+        storageName: oxigraph-storage
+        storageType: AzureFile
