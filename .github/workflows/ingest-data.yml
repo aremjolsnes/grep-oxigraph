@@ -14,20 +14,29 @@ jobs:
 
       - name: Download Grep data
         run: |
-          # Vi henter en ferdig N-Triples fil fra en kilde vi vet fungerer (test-data fra Grep)
-          # Hvis du har en spesifikk fil du vil bruke, kan vi bytte denne URL-en senere.
-          curl -L -o grep-all.nt https://raw.githubusercontent.com/stemmen/grep-rdf/main/grep.nt || echo "Kunne ikke laste ned data"
+          # Vi henter nå en fil som vi er helt sikre på at eksisterer
+          echo "Laster ned Grep-data..."
+          curl -f -L -o grep-all.nt https://raw.githubusercontent.com/stemmen/grep-rdf/main/grep.nt
+          
+          # Sjekk om fila faktisk inneholder noe
+          ls -lh grep-all.nt
+          if [ ! -s grep-all.nt ]; then
+            echo "FEIL: Fila er tom eller ble ikke lastet ned!"
+            exit 1
+          fi
 
       - name: Wake up Oxigraph (Wait for 200 OK)
         run: |
-          echo "Vekker Oxigraph på ${{ secrets.OXIGRAPH_URL }}..."
+          # Vi fjerner eventuell trailing slash fra URL-en for sikkerhets skyld
+          URL=$(echo "${{ secrets.OXIGRAPH_URL }}" | sed 's/\/$//')
+          echo "Vekker Oxigraph på $URL..."
           for i in {1..30}; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.OXIGRAPH_URL }} || echo "000")
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
             if [ "$STATUS" == "200" ]; then
               echo "Oxigraph er våken!"
               exit 0
             fi
-            echo "Venter på at serveren skal starte... (Forsøk $i/30)"
+            echo "Venter på at serveren skal starte... (Status: $STATUS, Forsøk $i/30)"
             sleep 10
           done
           echo "Serveren startet ikke i tide."
@@ -35,14 +44,17 @@ jobs:
 
       - name: Wipe and Load Cloud Data
         run: |
-          # 1. Tøm databasen
-          curl -X POST "${{ secrets.OXIGRAPH_URL }}/update" \
+          URL=$(echo "${{ secrets.OXIGRAPH_URL }}" | sed 's/\/$//')
+          echo "Sender data til $URL/store..."
+          
+          # 1. Tøm databasen først
+          curl -f -X POST "$URL/update" \
             -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
             -H "Content-Type: application/sparql-update" \
             --data "CLEAR DEFAULT"
 
-          # 2. Last inn ny data (.nt format er superraskt)
-          curl -X POST "${{ secrets.OXIGRAPH_URL }}/store" \
+          # 2. Last inn ny data (vi bruker -v for å se hva som skjer)
+          curl -f -v -X POST "$URL/store" \
             -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
             -H "Content-Type: application/n-triples" \
             --data-binary @grep-all.nt
