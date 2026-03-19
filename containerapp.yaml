@@ -10,7 +10,7 @@ properties:
       transport: auto
   template:
     containers:
-    - image: ghcr.io/${{USER_REPLACE_ME}}/grep-oxigraph:latest
+    - image: ghcr.io/OWNER_PLACEHOLDER/grep-oxigraph:latest
       name: grep-oxigraph
       resources:
         cpu: 0.25
