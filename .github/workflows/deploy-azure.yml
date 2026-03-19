@@ -43,15 +43,15 @@ jobs:
           # 2. Hent lagringsnøkkelen
           STORAGE_KEY=$(az storage account keys list --resource-group rg-grep-prod --account-name grepoxiamj123 --query "[0].value" --output tsv)
 
-          # 3. Definer lagringen i Environment-et
+          # 3. Definer lagringen i Environment-et (her var feilen i flagg-navnene)
           az containerapp env storage set \
             --name env-grep-prod \
             --resource-group rg-grep-prod \
             --storage-name oxigraph-storage \
-            --account-name grepoxiamj123 \
-            --share-name oxigraph-data \
-            --access-mode ReadWrite \
-            --account-key $STORAGE_KEY
+            --azure-file-account-name grepoxiamj123 \
+            --azure-file-share-name oxigraph-data \
+            --azure-file-account-key $STORAGE_KEY \
+            --access-mode ReadWrite
 
           # 4. Opprett eller oppdater selve Container Appen med montert disk
           az containerapp create \
