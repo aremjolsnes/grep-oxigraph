@@ -14,45 +14,38 @@ jobs:
 
       - name: Create Test Data
         run: |
-          # Vi lager noen få test-tripler manuelt for å bekrefte at opplastingen fungerer
           echo "Lager testdata..."
           cat <<EOF > grep-all.nt
-          <https://data.udir.no/kl06/test-ressurs-1> <http://www.w3.org/2000/01/rdf-schema#label> "Dette er en test-trippel i Azure" .
-          <https://data.udir.no/kl06/test-ressurs-1> <http://www.w3.org/2000/01/rdf-schema#comment> "Oxigraph fungerer med persistent lagring!" .
-          <https://data.udir.no/kl06/test-ressurs-2> <http://www.w3.org/2000/01/rdf-schema#label> "Grep Oxigraph" .
+          <https://data.udir.no/kl06/test-1> <http://www.w3.org/2000/01/rdf-schema#label> "Test 1" .
+          <https://data.udir.no/kl06/test-2> <http://www.w3.org/2000/01/rdf-schema#label> "Test 2" .
           EOF
-          
-          ls -lh grep-all.nt
 
-      - name: Wake up Oxigraph (Wait for 200 OK)
+      - name: Wake up Oxigraph
         run: |
           URL=$(echo "${{ secrets.OXIGRAPH_URL }}" | sed 's/\/$//')
-          echo "Vekker Oxigraph på $URL..."
-          for i in {1..30}; do
+          for i in {1..10}; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
-            if [ "$STATUS" == "200" ]; then
-              echo "Oxigraph er våken!"
-              exit 0
-            fi
-            echo "Venter på at serveren skal starte... (Status: $STATUS, Forsøk $i/30)"
-            sleep 10
+            if [ "$STATUS" == "200" ]; then exit 0; fi
+            sleep 5
           done
-          echo "Serveren startet ikke i tide."
-          exit 1
 
       - name: Wipe and Load Cloud Data
         run: |
           URL=$(echo "${{ secrets.OXIGRAPH_URL }}" | sed 's/\/$//')
-          echo "Sender data til $URL/store..."
           
-          # 1. Tøm databasen først
-          curl -f -X POST "$URL/update" \
-            -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
-            -H "Content-Type: application/sparql-update" \
-            --data "CLEAR DEFAULT"
-
-          # 2. Last inn ny data
-          curl -f -v -X POST "$URL/store" \
+          # Vi bruker nå den mest eksplisitte metoden: /store?default
+          echo "Dytter data til $URL/store?default ..."
+          curl -f -X POST "$URL/store?default" \
             -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
             -H "Content-Type: application/n-triples" \
             --data-binary @grep-all.nt
+
+      - name: Verify Data Immediately
+        run: |
+          URL=$(echo "${{ secrets.OXIGRAPH_URL }}" | sed 's/\/$//')
+          echo "Sjekker antall tripler rett etter opplasting..."
+          curl -f -X POST "$URL/query" \
+            -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
+            -H "Content-Type: application/sparql-query" \
+            -H "Accept: application/sparql-results+json" \
+            --data "SELECT (COUNT(*) as ?c) WHERE { ?s ?p ?o }"
