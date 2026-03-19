@@ -37,11 +37,15 @@ jobs:
 
       - name: Deploy to Azure Container Apps
         run: |
-          # Vi bruker Azure CLI direkte for best kontroll
-          az containerapp up \
+          # 1. Sikre at Managed Environment finnes
+          az containerapp env create --name env-grep-prod --resource-group rg-grep-prod --location northeurope
+
+          # 2. Opprett eller oppdater selve Container Appen med en forenklet kommando
+          az containerapp create \
             --name grep-oxigraph \
             --resource-group rg-grep-prod \
+            --environment env-grep-prod \
             --image ghcr.io/${{ github.repository_owner }}/grep-oxigraph:latest \
             --cpu 0.25 --memory 0.5Gi \
             --ingress external --target-port 7878 \
-            --scale-rule-type http --min-replicas 0 --max-replicas 1
+            --min-replicas 0 --max-replicas 1
