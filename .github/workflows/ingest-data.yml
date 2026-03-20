@@ -40,56 +40,60 @@ jobs:
           $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${user}:${pass}"))
           $headers = @{ "Authorization" = "Basic $auth" }
           
-          # 1. Hent siste endrings-id fra Udir
-          Write-Host "Sjekker etter endringer hos Udir..."
+          # 1. Garantert Wake-up
+          Write-Host "Venter på at Oxigraph skal bli klar ved $url..."
+          $ready = $false
+          for ($i=1; $i -le 20; $i++) {
+              try {
+                  $check = Invoke-WebRequest -Uri "$url/query" -Method Post -Body "SELECT * WHERE { ?s ?p ?o } LIMIT 1" -Headers (@{ "Content-Type" = "application/sparql-query" } + $headers) -ErrorAction Stop
+                  if ($check.StatusCode -eq 200) { $ready = $true; break }
+              } catch {
+                  Write-Host "Venter... (forsøk $i/20)"
+                  Start-Sleep -Seconds 5
+              }
+          }
+          if (!$ready) { throw "Oxigraph ble ikke klar i tide." }
+          
+          # 2. Hent ID-er
           $udirResponse = Invoke-RestMethod -Uri "https://data.udir.no/kl06/v201906/endringer?antall=1"
           $latestId = $udirResponse."endrings-id"
-          Write-Host "Siste endrings-id fra Udir: $latestId"
           
-          # 2. Sjekk hva vi har lagret i Oxigraph
-          $query = "SELECT ?id WHERE { <https://grep.udir.no/meta> <https://grep.udir.no/schema/last-id> ?id }"
-          $storedId = "ingenting"
-          try {
-              $response = Invoke-WebRequest -Uri "$url/query" -Method Post -Body $query -Headers @{ "Authorization" = "Basic $auth"; "Content-Type" = "application/sparql-query"; "Accept" = "application/sparql-results+json" } -ErrorAction SilentlyContinue
-              $json = $response.Content | ConvertFrom-Json
-              $storedId = $json.results.bindings[0].id.value
-          } catch {}
-          Write-Host "Lagret ID i Oxigraph: $storedId"
-          
-          # 3. Sammenlign (hopp over hvis like, med mindre det er manuelt)
-          if ("$latestId" -eq "$storedId" -and "${{ github.event_name }}" -ne "workflow_dispatch") {
-              Write-Host "Ingen nye endringer hos Udir. Hopper over oppdatering."
-              exit 0
-          }
-          Write-Host "Endring oppdaget eller manuell kjøring! Starter prosess..."
-          
-          # 4. Vekker Oxigraph og tømmer gammelt datasett
+          # 3. Tøm (Valgfritt, men trygt)
+          Write-Host "Tømmer databasen..."
           try { Invoke-WebRequest -Uri "$url/store?default" -Method Delete -Headers $headers -ErrorAction SilentlyContinue } catch {}
           
-          # 5. Last ned og pakk ut
+          # 4. Last ned og pakk ut
           if (!(Test-Path "temp_data")) { New-Item -ItemType Directory -Path "temp_data" }
           Invoke-WebRequest -Uri "https://data.udir.no/kl06/v201906/dump/jsonld" -OutFile "temp_data/data.zip"
           Expand-Archive -Path "temp_data/data.zip" -DestinationPath "temp_data/extracted" -Force
           
-          # 6. Parallell opplasting
+          # 5. Parallell opplasting med RETRY
           $files = Get-ChildItem "temp_data/extracted/*.jsonld" -Recurse
-          Write-Host "Starter parallell opplasting av $($files.Count) filer..."
+          Write-Host "Laster opp $($files.Count) filer med retry-logikk..."
+          
           $files | ForEach-Object -Parallel {
-              $fileContent = [System.IO.File]::ReadAllBytes($_.FullName)
               $headers = $using:headers
               $headers["Content-Type"] = "application/ld+json"
               $postUrl = "$($using:url)/store?default"
-              try {
-                  Invoke-WebRequest -Uri $postUrl -Method Post -Body $fileContent -Headers $headers -ErrorAction Stop
-                  Write-Host "Ferdig med: $($_.Name)"
-              } catch {
-                  Write-Warning "Feil ved opplasting av $($_.Name): $($_.Exception.Message)"
+              $fileContent = [System.IO.File]::ReadAllBytes($_.FullName)
+              
+              $success = $false
+              for ($attempt=1; $attempt -le 3; $attempt++) {
+                  try {
+                      Invoke-WebRequest -Uri $postUrl -Method Post -Body $fileContent -Headers $headers -ErrorAction Stop
+                      $success = $true
+                      break
+                  } catch {
+                      Write-Warning "Forsøk $attempt feilet for $($_.Name): $($_.Exception.Message)"
+                      Start-Sleep -Seconds ($attempt * 2)
+                  }
               }
-          } -ThrottleLimit 10
+              if (!$success) { Write-Error "Kunne ikke laste opp $($_.Name) etter 3 forsøk." }
+          } -ThrottleLimit 8
           
-          # 7. Lagre metadata
+          # 6. Metadata
           $meta = "<https://grep.udir.no/meta> <https://grep.udir.no/schema/last-id> `"$latestId`" ."
           $headers["Content-Type"] = "application/n-triples"
           Invoke-WebRequest -Uri "$url/store?default" -Method Post -Body $meta -Headers $headers
           
-          Write-Host "Fullført! Oxigraph er nå oppdatert til Udir-ID: $latestId"
+          Write-Host "Fullført! Oppdatert til ID: $latestId"
