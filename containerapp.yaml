@@ -13,8 +13,8 @@ properties:
       - image: ghcr.io/OWNER_PLACEHOLDER/grep-oxigraph:latest
         name: grep-oxigraph
         resources:
-          cpu: 1.0
-          memory: 2.0Gi
+          cpu: 2.0
+          memory: 4.0Gi
         volumeMounts:
           - mountPath: /data
             volumeName: data-volume
