@@ -49,11 +49,6 @@ jobs:
           tar -xf apache-jena-5.3.0.tar.gz
           RIOT_CMD=$(pwd)/apache-jena-5.3.0/bin/riot
           
-          # 7. Konverter til én stor N-Triples fil
-          echo "Konverterer JSON-LD til N-Triples..."
-          find temp/extracted -name "*.jsonld" > file_list.txt
-          $RIOT_CMD --output=nt $(cat file_list.txt) > all_data.nt
-          
           # 8. Sørg for at Oxigraph er våken
           echo "Vekker Oxigraph..."
           for i in {1..20}; do
@@ -63,7 +58,7 @@ jobs:
             sleep 10
           done
 
-          # 9. Tøm og Last opp til Oxigraph
+          # 9. Tøm gammelt datasett (Viktig for stabilitet)
           echo "Tømmer gammelt datasett i Oxigraph..."
           curl -f -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
                -X POST \
@@ -71,19 +66,24 @@ jobs:
                --data "CLEAR DEFAULT" \
                "$URL/update"
           
-          echo "Laster opp nye tripler (ca 1.1 million)..."
+          # 10. Streaming Ingest (Super-fast methodology)
+          echo "Starter streaming-opplasting av ca 1.1 million tripler..."
+          find temp/extracted -name "*.jsonld" > file_list.txt
+          
+          # Vi piper utdata fra RIOT direkte inn i curl uten å lagre på disk
+          $RIOT_CMD --output=nt $(cat file_list.txt) | \
           curl -f -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
                -X POST \
                -H "Content-Type: application/n-triples" \
-               --data-binary @all_data.nt \
+               --data-binary @- \
                "$URL/store?default"
-
-          # 10. Lagre den nye ID-en som metadata
-          echo "<https://grep.udir.no/meta> <https://grep.udir.no/schema/last-id> \"$LATEST_ID\" ." > metadata.nt
+          
+          # 11. Lagre den nye ID-en som metadata
+          echo "<https://grep.udir.no/meta> <https://grep.udir.no/schema/last-id> \"$LATEST_ID\" ." | \
           curl -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
                -X POST \
                -H "Content-Type: application/n-triples" \
-               --data-binary @metadata.nt \
+               --data-binary @- \
                "$URL/store?default"
           
           echo "Fullført! Oxigraph er nå oppdatert til Udir-ID: $LATEST_ID"
