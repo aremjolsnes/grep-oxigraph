@@ -31,57 +31,65 @@ jobs:
           echo "Lagret ID i Oxigraph: $STORED_ID"
 
           # 4. Sammenlign (hopp over hvis like, med mindre det er manuell start)
-          if [ "$LATEST_ID" == "$STORED_ID" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
-            echo "Ingen nye endringer hos Udir. Hopper over oppdatering."
-            exit 0
-          fi
-          echo "Endring oppdaget eller manuell kjøring! Starter prosess..."
-
-          # 5. Last ned rådata
-          mkdir -p temp/extracted
-          echo "Laster ned dump fra Udir..."
-          curl -f -L https://data.udir.no/kl06/v201906/dump/jsonld -o temp/data.zip
-          unzip -q temp/data.zip -d temp/extracted
-
-          # 6. Installer Apache Jena (RIOT) for konvertering
-          echo "Laster ned Apache Jena (RIOT)..."
-          wget -q https://archive.apache.org/dist/jena/binaries/apache-jena-5.3.0.tar.gz
-          tar -xf apache-jena-5.3.0.tar.gz
-          RIOT_CMD=$(pwd)/apache-jena-5.3.0/bin/riot
+      - name: Download, Process and Ingest (Super-fast PowerShell)
+        shell: pwsh
+        run: |
+          $url = "${{ secrets.OXIGRAPH_URL }}".TrimEnd('/')
+          $user = "${{ secrets.OXIGRAPH_USER }}"
+          $pass = "${{ secrets.OXIGRAPH_PASSWORD }}"
+          $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${user}:${pass}"))
+          $headers = @{ "Authorization" = "Basic $auth" }
           
-          # 8. Sørg for at Oxigraph er våken
-          echo "Vekker Oxigraph..."
-          for i in {1..20}; do
-            if curl -s -o /dev/null -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" --fail "$URL"; then
-              break
-            fi
-            sleep 10
-          done
-
-          # 9. Tøm gammelt datasett (Viktig for stabilitet)
-          echo "Tømmer gammelt datasett i Oxigraph..."
-          curl -f -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
-               -X DELETE \
-               "$URL/store?default"
+          # 1. Hent siste endrings-id fra Udir
+          Write-Host "Sjekker etter endringer hos Udir..."
+          $udirResponse = Invoke-RestMethod -Uri "https://data.udir.no/kl06/v201906/endringer?antall=1"
+          $latestId = $udirResponse."endrings-id"
+          Write-Host "Siste endrings-id fra Udir: $latestId"
           
-          # 10. Streaming Ingest (Super-fast methodology)
-          echo "Starter streaming-opplasting av ca 1.1 million tripler..."
-          find temp/extracted -name "*.jsonld" > file_list.txt
+          # 2. Sjekk hva vi har lagret i Oxigraph
+          $query = "SELECT ?id WHERE { <https://grep.udir.no/meta> <https://grep.udir.no/schema/last-id> ?id }"
+          $storedId = "ingenting"
+          try {
+              $response = Invoke-WebRequest -Uri "$url/query" -Method Post -Body $query -Headers @{ "Authorization" = "Basic $auth"; "Content-Type" = "application/sparql-query"; "Accept" = "application/sparql-results+json" } -ErrorAction SilentlyContinue
+              $json = $response.Content | ConvertFrom-Json
+              $storedId = $json.results.bindings[0].id.value
+          } catch {}
+          Write-Host "Lagret ID i Oxigraph: $storedId"
           
-          # Vi piper utdata fra RIOT direkte inn i curl uten å lagre på disk
-          $RIOT_CMD --output=nt $(cat file_list.txt) | \
-          curl -f -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
-               -X POST \
-               -H "Content-Type: application/n-triples" \
-               --data-binary @- \
-               "$URL/store?default"
+          # 3. Sammenlign (hopp over hvis like, med mindre det er manuelt)
+          if ("$latestId" -eq "$storedId" -and "${{ github.event_name }}" -ne "workflow_dispatch") {
+              Write-Host "Ingen nye endringer hos Udir. Hopper over oppdatering."
+              exit 0
+          }
+          Write-Host "Endring oppdaget eller manuell kjøring! Starter prosess..."
           
-          # 11. Lagre den nye ID-en som metadata
-          echo "<https://grep.udir.no/meta> <https://grep.udir.no/schema/last-id> \"$LATEST_ID\" ." | \
-          curl -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
-               -X POST \
-               -H "Content-Type: application/n-triples" \
-               --data-binary @- \
-               "$URL/store?default"
+          # 4. Vekker Oxigraph og tømmer gammelt datasett
+          try { Invoke-WebRequest -Uri "$url/store?default" -Method Delete -Headers $headers -ErrorAction SilentlyContinue } catch {}
           
-          echo "Fullført! Oxigraph er nå oppdatert til Udir-ID: $LATEST_ID"
+          # 5. Last ned og pakk ut
+          if (!(Test-Path "temp_data")) { New-Item -ItemType Directory -Path "temp_data" }
+          Invoke-WebRequest -Uri "https://data.udir.no/kl06/v201906/dump/jsonld" -OutFile "temp_data/data.zip"
+          Expand-Archive -Path "temp_data/data.zip" -DestinationPath "temp_data/extracted" -Force
+          
+          # 6. Parallell opplasting
+          $files = Get-ChildItem "temp_data/extracted/*.jsonld" -Recurse
+          Write-Host "Starter parallell opplasting av $($files.Count) filer..."
+          $files | ForEach-Object -Parallel {
+              $fileContent = [System.IO.File]::ReadAllBytes($_.FullName)
+              $headers = $using:headers
+              $headers["Content-Type"] = "application/ld+json"
+              $postUrl = "$($using:url)/store?default"
+              try {
+                  Invoke-WebRequest -Uri $postUrl -Method Post -Body $fileContent -Headers $headers -ErrorAction Stop
+                  Write-Host "Ferdig med: $($_.Name)"
+              } catch {
+                  Write-Warning "Feil ved opplasting av $($_.Name): $($_.Exception.Message)"
+              }
+          } -ThrottleLimit 10
+          
+          # 7. Lagre metadata
+          $meta = "<https://grep.udir.no/meta> <https://grep.udir.no/schema/last-id> `"$latestId`" ."
+          $headers["Content-Type"] = "application/n-triples"
+          Invoke-WebRequest -Uri "$url/store?default" -Method Post -Body $meta -Headers $headers
+          
+          Write-Host "Fullført! Oxigraph er nå oppdatert til Udir-ID: $latestId"
