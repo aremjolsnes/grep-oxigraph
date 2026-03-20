@@ -61,10 +61,8 @@ jobs:
           # 9. Tøm gammelt datasett (Viktig for stabilitet)
           echo "Tømmer gammelt datasett i Oxigraph..."
           curl -f -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
-               -X POST \
-               -H "Content-Type: application/sparql-update" \
-               --data "CLEAR DEFAULT" \
-               "$URL/update"
+               -X DELETE \
+               "$URL/store?default"
           
           # 10. Streaming Ingest (Super-fast methodology)
           echo "Starter streaming-opplasting av ca 1.1 million tripler..."
