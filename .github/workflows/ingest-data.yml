@@ -31,69 +31,46 @@ jobs:
           echo "Lagret ID i Oxigraph: $STORED_ID"
 
           # 4. Sammenlign (hopp over hvis like, med mindre det er manuell start)
-      - name: Download, Process and Ingest (Super-fast PowerShell)
-        shell: pwsh
+      - name: The Ultimate Ingest (Streaming JSON-LD, No Java)
+        shell: bash
         run: |
-          $url = "${{ secrets.OXIGRAPH_URL }}".TrimEnd('/')
-          $user = "${{ secrets.OXIGRAPH_USER }}"
-          $pass = "${{ secrets.OXIGRAPH_PASSWORD }}"
-          $auth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${user}:${pass}"))
-          $headers = @{ "Authorization" = "Basic $auth" }
+          URL=$(echo "${{ secrets.OXIGRAPH_URL }}" | sed 's/\/$//')
           
-          # 1. Garantert Wake-up
-          Write-Host "Venter på at Oxigraph skal bli klar ved $url..."
-          $ready = $false
-          for ($i=1; $i -le 20; $i++) {
-              try {
-                  $check = Invoke-WebRequest -Uri "$url/query" -Method Post -Body "SELECT * WHERE { ?s ?p ?o } LIMIT 1" -Headers (@{ "Content-Type" = "application/sparql-query" } + $headers) -ErrorAction Stop
-                  if ($check.StatusCode -eq 200) { $ready = $true; break }
-              } catch {
-                  Write-Host "Venter... (forsøk $i/20)"
-                  Start-Sleep -Seconds 5
-              }
-          }
-          if (!$ready) { throw "Oxigraph ble ikke klar i tide." }
+          # 1. Vekker Oxigraph (Viktig)
+          echo "Vekker Oxigraph..."
+          for i in {1..20}; do
+            if curl -s -o /dev/null -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" --fail "$URL"; then
+              break
+            fi
+            sleep 5
+          done
+
+          # 2. Tømmer databasen (Wipe)
+          echo "Tømmer databasen..."
+          curl -s -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" -X DELETE "$URL/store?default" || true
           
-          # 2. Hent ID-er
-          $udirResponse = Invoke-RestMethod -Uri "https://data.udir.no/kl06/v201906/endringer?antall=1"
-          $latestId = $udirResponse."endrings-id"
+          # 3. Laster ned og pakker ut
+          echo "Henter data..."
+          mkdir -p temp_data/extracted
+          curl -sL https://data.udir.no/kl06/v201906/dump/jsonld -o temp_data/data.zip
+          unzip -q temp_data/data.zip -d temp_data/extracted
           
-          # 3. Tøm (Valgfritt, men trygt)
-          Write-Host "Tømmer databasen..."
-          try { Invoke-WebRequest -Uri "$url/store?default" -Method Delete -Headers $headers -ErrorAction SilentlyContinue } catch {}
+          # 4. SUPER-STREAMING (The Secret Sauce)
+          # Vi bruker Python til å generere en gyldig JSON-liste av alle filene og piper den til curl
+          echo "Starter bulk-opplasting av 46k+ filer via streaming..."
+          python3 -c "
+          import os, sys
+          files = [os.path.join(dp, f) for dp, dn, filenames in os.walk('temp_data/extracted') for f in filenames if f.endswith('.jsonld')]
+          sys.stdout.write('[')
+          for i, f_path in enumerate(files):
+              if i > 0: sys.stdout.write(',')
+              with open(f_path, 'r') as f:
+                  sys.stdout.write(f.read())
+          sys.stdout.write(']')
+          " | curl -f -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
+               -X POST \
+               -H "Content-Type: application/ld+json" \
+               --data-binary @- \
+               "$URL/store?default"
           
-          # 4. Last ned og pakk ut
-          if (!(Test-Path "temp_data")) { New-Item -ItemType Directory -Path "temp_data" }
-          Invoke-WebRequest -Uri "https://data.udir.no/kl06/v201906/dump/jsonld" -OutFile "temp_data/data.zip"
-          Expand-Archive -Path "temp_data/data.zip" -DestinationPath "temp_data/extracted" -Force
-          
-          # 5. Parallell opplasting med RETRY
-          $files = Get-ChildItem "temp_data/extracted/*.jsonld" -Recurse
-          Write-Host "Laster opp $($files.Count) filer med retry-logikk..."
-          
-          $files | ForEach-Object -Parallel {
-              $headers = $using:headers
-              $headers["Content-Type"] = "application/ld+json"
-              $postUrl = "$($using:url)/store?default"
-              $fileContent = [System.IO.File]::ReadAllBytes($_.FullName)
-              
-              $success = $false
-              for ($attempt=1; $attempt -le 3; $attempt++) {
-                  try {
-                      Invoke-WebRequest -Uri $postUrl -Method Post -Body $fileContent -Headers $headers -ErrorAction Stop
-                      $success = $true
-                      break
-                  } catch {
-                      Write-Warning "Forsøk $attempt feilet for $($_.Name): $($_.Exception.Message)"
-                      Start-Sleep -Seconds ($attempt * 2)
-                  }
-              }
-              if (!$success) { Write-Error "Kunne ikke laste opp $($_.Name) etter 3 forsøk." }
-          } -ThrottleLimit 8
-          
-          # 6. Metadata
-          $meta = "<https://grep.udir.no/meta> <https://grep.udir.no/schema/last-id> `"$latestId`" ."
-          $headers["Content-Type"] = "application/n-triples"
-          Invoke-WebRequest -Uri "$url/store?default" -Method Post -Body $meta -Headers $headers
-          
-          Write-Host "Fullført! Oppdatert til ID: $latestId"
+          echo "Ferdig! Oxigraph er nå oppdatert."
