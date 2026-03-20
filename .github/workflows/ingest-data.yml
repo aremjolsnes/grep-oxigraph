@@ -55,22 +55,28 @@ jobs:
           curl -sL https://data.udir.no/kl06/v201906/dump/jsonld -o temp_data/data.zip
           unzip -q temp_data/data.zip -d temp_data/extracted
           
-          # 4. SUPER-STREAMING (The Secret Sauce)
-          # Vi bruker Python til å generere en gyldig JSON-liste av alle filene og piper den til curl
-          echo "Starter bulk-opplasting av 46k+ filer via streaming..."
-          python3 -c "
-          import os, sys
+          # 4. BATCH-STREAMING (The Balanced Secret Sauce)
+          echo "Starter batch-opplasting av 46k+ filer (1000 per bolk)..."
+          URL=$URL python3 -c "
+          import os, sys, subprocess
+          url = os.environ['URL']
           files = [os.path.join(dp, f) for dp, dn, filenames in os.walk('temp_data/extracted') for f in filenames if f.endswith('.jsonld')]
-          sys.stdout.write('[')
-          for i, f_path in enumerate(files):
-              if i > 0: sys.stdout.write(',')
-              with open(f_path, 'r') as f:
-                  sys.stdout.write(f.read())
-          sys.stdout.write(']')
-          " | curl -f -u "${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}" \
-               -X POST \
-               -H "Content-Type: application/ld+json" \
-               --data-binary @- \
-               "$URL/store?default"
+          batch_size = 1000
+          for i in range(0, len(files), batch_size):
+              batch = files[i:i + batch_size]
+              print(f'Sender bolk {(i//batch_size)+1} ({(i)} til {min(i+batch_size, len(files))})...')
+              
+              json_data = '[' + ','.join(open(f, 'r').read() for f in batch) + ']'
+              
+              process = subprocess.Popen(
+                  ['curl', '-s', '-f', '-u', '${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}', 
+                   '-X', 'POST', '-H', 'Content-Type: application/ld+json', '--data-binary', '@-', f'{url}/store?default'],
+                  stdin=subprocess.PIPE
+              )
+              process.communicate(input=json_data.encode('utf-8'))
+              if process.returncode != 0:
+                  print(f'FEIL: Bolk {(i//batch_size)+1} feilet!')
+                  sys.exit(1)
+          "
           
           echo "Ferdig! Oxigraph er nå oppdatert."
