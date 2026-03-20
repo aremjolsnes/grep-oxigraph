@@ -13,8 +13,8 @@ properties:
       - image: ghcr.io/OWNER_PLACEHOLDER/grep-oxigraph:latest
         name: grep-oxigraph
         resources:
-          cpu: 0.5
-          memory: 1.0Gi
+          cpu: 1.0
+          memory: 2.0Gi
         volumeMounts:
           - mountPath: /data
             volumeName: data-volume
@@ -44,7 +44,5 @@ properties:
 
     volumes:
       - name: data-volume
-        storageName: oxigraph-storage
-        storageType: AzureFile
-        mountOptions: uid=1000,gid=1000,nobrl
+        storageType: EmptyDir
 
