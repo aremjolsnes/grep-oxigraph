@@ -56,24 +56,35 @@ jobs:
           unzip -q temp_data/data.zip -d temp_data/extracted
           
           # 4. BATCH-STREAMING (The Balanced Secret Sauce)
-          echo "Starter batch-opplasting av 46k+ filer (1000 per bolk)..."
+          echo "Starter batch-opplasting av 46k+ filer (500 per bolk)..."
           URL=$URL python3 -c "
-          import os, sys, subprocess
+          import os, sys, subprocess, json
           url = os.environ['URL']
           files = [os.path.join(dp, f) for dp, dn, filenames in os.walk('temp_data/extracted') for f in filenames if f.endswith('.jsonld')]
-          batch_size = 1000
+          batch_size = 500
+          print(f'Fant {len(files)} filer. Starter opplasting til {url}/store...')
           for i in range(0, len(files), batch_size):
-              batch = files[i:i + batch_size]
+              batch_files = files[i:i + batch_size]
               print(f'Sender bolk {(i//batch_size)+1} ({(i)} til {min(i+batch_size, len(files))})...')
               
-              json_data = '[' + ','.join(open(f, 'r').read() for f in batch) + ']'
+              # Robust generering av JSON-liste
+              batch_data = []
+              for f_path in batch_files:
+                  try:
+                      with open(f_path, 'r', encoding='utf-8-sig') as f:
+                          batch_data.append(json.load(f))
+                  except Exception as e:
+                      print(f'ADVARSEL: Kunne ikke lese {f_path}: {e}')
               
+              json_payload = json.dumps(batch_data)
+              
+              # Sender bolken via curl (uten -s for å se feil)
               process = subprocess.Popen(
-                  ['curl', '-s', '-f', '-u', '${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}', 
+                  ['curl', '-f', '-u', '${{ secrets.OXIGRAPH_USER }}:${{ secrets.OXIGRAPH_PASSWORD }}', 
                    '-X', 'POST', '-H', 'Content-Type: application/ld+json', '--data-binary', '@-', f'{url}/store?default'],
                   stdin=subprocess.PIPE
               )
-              process.communicate(input=json_data.encode('utf-8'))
+              process.communicate(input=json_payload.encode('utf-8'))
               if process.returncode != 0:
                   print(f'FEIL: Bolk {(i//batch_size)+1} feilet!')
                   sys.exit(1)
